@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<AudioTrayConfig xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <CommandName>Default command</CommandName>
+  <HotkeyModifiers>1</HotkeyModifiers>
+  <HotkeyKey>68</HotkeyKey>
+  <DarkMode>true</DarkMode>
+  <CycleDeviceIds>
+    <string>{0.0.0.00000000}.{43c6272b-a10a-4857-b87c-79536bddd320}</string>
+    <string>{0.0.0.00000000}.{81f1da0b-3c93-44b4-9d70-1e83b0f0bb9c}</string>
+  </CycleDeviceIds>
+  <Marks>
+    <DeviceMark DeviceId="{0.0.0.00000000}.{43c6272b-a10a-4857-b87c-79536bddd320}" ColorName="Red" />
+    <DeviceMark DeviceId="{0.0.0.00000000}.{81f1da0b-3c93-44b4-9d70-1e83b0f0bb9c}" ColorName="Green" />
+  </Marks>
+</AudioTrayConfig>
