@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -366,6 +367,9 @@ namespace AudioTray
         public string DeviceId { get; set; }
 
         [XmlAttribute]
+        public string DeviceName { get; set; }
+
+        [XmlAttribute]
         public string ColorName { get; set; }
     }
 
@@ -459,7 +463,7 @@ namespace AudioTray
             config = LoadConfig(configPath);
             devices = new List<AudioDevice>();
 
-            notifyIcon = new NotifyIcon { Visible = true };
+            notifyIcon = new NotifyIcon { Icon = AppIcon.Load(), Visible = true };
             hotkeyWindow = new HotkeyWindow(config.HotkeyModifiers, config.HotkeyKey);
             hotkeyWindow.HotkeyPressed += delegate { SwitchNextDevice(); };
 
@@ -511,13 +515,29 @@ namespace AudioTray
             {
                 using (var stream = File.OpenRead(path))
                 {
-                    return (AppConfig)new XmlSerializer(typeof(AppConfig)).Deserialize(stream);
+                    return NormalizeConfig((AppConfig)new XmlSerializer(typeof(AppConfig)).Deserialize(stream));
                 }
             }
             catch
             {
                 return new AppConfig();
             }
+        }
+
+        private static AppConfig NormalizeConfig(AppConfig loaded)
+        {
+            var normalized = loaded ?? new AppConfig();
+            if (normalized.CycleDeviceIds == null)
+            {
+                normalized.CycleDeviceIds = new List<string>();
+            }
+
+            if (normalized.Marks == null)
+            {
+                normalized.Marks = new List<DeviceMark>();
+            }
+
+            return normalized;
         }
 
         private void SaveConfig()
@@ -554,21 +574,52 @@ namespace AudioTray
 
             var activeIds = new HashSet<string>(devices.Select(d => d.Id), StringComparer.Ordinal);
             config.CycleDeviceIds = config.CycleDeviceIds.Where(activeIds.Contains).Distinct().ToList();
-            config.Marks = config.Marks.Where(m => activeIds.Contains(m.DeviceId)).ToList();
+            if (RefreshDeviceMarkIds())
+            {
+                SaveConfig();
+            }
+        }
+
+        private bool RefreshDeviceMarkIds()
+        {
+            var changed = false;
+            foreach (var device in devices)
+            {
+                var exactMark = config.Marks.FirstOrDefault(m => string.Equals(m.DeviceId, device.Id, StringComparison.Ordinal));
+                if (exactMark != null)
+                {
+                    if (!string.Equals(exactMark.DeviceName, device.Name, StringComparison.Ordinal))
+                    {
+                        exactMark.DeviceName = device.Name;
+                        changed = true;
+                    }
+
+                    continue;
+                }
+
+                var nameMark = config.Marks.FirstOrDefault(m => string.Equals(m.DeviceName, device.Name, StringComparison.Ordinal));
+                if (nameMark != null)
+                {
+                    nameMark.DeviceId = device.Id;
+                    changed = true;
+                }
+            }
+
+            return changed;
         }
 
         private void RebuildMenu()
         {
             RefreshDevices();
             var menu = CreateThemedContextMenu();
-            menu.Items.Add(new ToolStripMenuItem("\u5f53\u524d\u8bbe\u5907: " + GetDeviceName(currentDeviceId)) { Enabled = false });
+            menu.Items.Add(new ToolStripMenuItem("\u5f53\u524d\u8bbe\u5907: " + GetDeviceName(currentDeviceId)) { Enabled = false, AutoSize = false, Height = 34 });
             menu.Items.Add(new ToolStripSeparator());
 
-            var openItem = new ToolStripMenuItem("\u6253\u5f00\u8bbe\u7f6e");
+            var openItem = new ToolStripMenuItem("\u6253\u5f00\u8bbe\u7f6e") { AutoSize = false, Height = 34 };
             openItem.Click += delegate { ShowSettings(); };
             menu.Items.Add(openItem);
 
-            var switchItem = new ToolStripMenuItem("\u5207\u6362\u5230\u4e0b\u4e00\u4e2a\u8bbe\u5907 (" + FormatHotkey(config.HotkeyModifiers, config.HotkeyKey) + ")");
+            var switchItem = new ToolStripMenuItem("\u5207\u6362\u5230\u4e0b\u4e00\u4e2a\u8bbe\u5907 (" + FormatHotkey(config.HotkeyModifiers, config.HotkeyKey) + ")") { AutoSize = false, Height = 34 };
             switchItem.Click += delegate { SwitchNextDevice(); };
             menu.Items.Add(switchItem);
 
@@ -579,13 +630,17 @@ namespace AudioTray
                 var deviceId = device.Id;
                 var deviceItem = new ToolStripMenuItem(device.Name)
                 {
-                    Checked = string.Equals(device.Id, currentDeviceId, StringComparison.Ordinal)
+                    Checked = string.Equals(device.Id, currentDeviceId, StringComparison.Ordinal),
+                    AutoSize = false,
+                    Height = 34
                 };
                 deviceItem.Click += delegate { SwitchToDevice(deviceId); };
 
                 var cycleItem = new ToolStripMenuItem("\u52a0\u5165\u5feb\u6377\u5207\u6362")
                 {
-                    Checked = config.CycleDeviceIds.Contains(deviceId)
+                    Checked = config.CycleDeviceIds.Contains(deviceId),
+                    AutoSize = false,
+                    Height = 32
                 };
                 cycleItem.Click += delegate
                 {
@@ -599,7 +654,9 @@ namespace AudioTray
                 {
                     var markItem = new ToolStripMenuItem("\u6807\u8bb0\u4e3a" + GetColorDisplayName(colorName))
                     {
-                        Checked = string.Equals(GetMark(deviceId), colorName, StringComparison.Ordinal)
+                        Checked = string.Equals(GetMark(deviceId), colorName, StringComparison.Ordinal),
+                        AutoSize = false,
+                        Height = 32
                     };
                     var localColorName = colorName;
                     markItem.Click += delegate
@@ -610,7 +667,7 @@ namespace AudioTray
                     deviceItem.DropDownItems.Add(markItem);
                 }
 
-                var clearItem = new ToolStripMenuItem("\u6e05\u9664\u989c\u8272\u6807\u8bb0");
+                var clearItem = new ToolStripMenuItem("\u6e05\u9664\u989c\u8272\u6807\u8bb0") { AutoSize = false, Height = 32 };
                 clearItem.Click += delegate
                 {
                     SetDeviceMark(deviceId, null);
@@ -622,7 +679,7 @@ namespace AudioTray
             }
 
             menu.Items.Add(new ToolStripSeparator());
-            var refreshItem = new ToolStripMenuItem("\u5237\u65b0\u8bbe\u5907");
+            var refreshItem = new ToolStripMenuItem("\u5237\u65b0\u8bbe\u5907") { AutoSize = false, Height = 34 };
             refreshItem.Click += delegate
             {
                 RebuildMenu();
@@ -634,7 +691,7 @@ namespace AudioTray
             };
             menu.Items.Add(refreshItem);
 
-            var exitItem = new ToolStripMenuItem("\u9000\u51fa");
+            var exitItem = new ToolStripMenuItem("\u9000\u51fa") { AutoSize = false, Height = 34 };
             exitItem.Click += delegate { ExitThread(); };
             menu.Items.Add(exitItem);
             ApplyMenuTheme(menu.Items);
@@ -650,34 +707,46 @@ namespace AudioTray
         private ContextMenuStrip CreateThemedContextMenu()
         {
             var dark = config.DarkMode;
-            var background = dark ? Color.FromArgb(42, 42, 42) : Color.White;
+            var background = dark ? Color.FromArgb(24, 26, 31) : Color.White;
             var text = dark ? Color.White : Color.FromArgb(30, 30, 30);
-            var hover = dark ? Color.FromArgb(58, 58, 58) : Color.FromArgb(232, 232, 232);
-            var border = dark ? Color.FromArgb(82, 82, 82) : Color.FromArgb(180, 180, 180);
+            var hover = dark ? Color.FromArgb(38, 43, 52) : Color.FromArgb(237, 242, 248);
+            var border = dark ? Color.FromArgb(72, 80, 94) : Color.FromArgb(205, 213, 224);
             return new ContextMenuStrip
             {
                 BackColor = background,
                 ForeColor = text,
                 Renderer = CreateMenuRenderer(),
-                ShowImageMargin = true
+                ShowCheckMargin = false,
+                ShowImageMargin = false,
+                Padding = new Padding(8, 8, 8, 8)
             };
         }
 
         private void ApplyMenuTheme(ToolStripItemCollection items)
         {
             var dark = config.DarkMode;
-            var background = dark ? Color.FromArgb(42, 42, 42) : Color.White;
-            var text = dark ? Color.White : Color.FromArgb(30, 30, 30);
+            var background = dark ? Color.FromArgb(24, 26, 31) : Color.White;
+            var text = dark ? Color.FromArgb(245, 247, 250) : Color.FromArgb(30, 30, 30);
             foreach (ToolStripItem item in items)
             {
+                item.AutoSize = true;
                 item.BackColor = background;
                 item.ForeColor = text;
+                item.Margin = Padding.Empty;
+                item.Padding = new Padding(8, 0, 8, 0);
                 var menuItem = item as ToolStripMenuItem;
                 if (menuItem != null && menuItem.DropDownItems.Count > 0)
                 {
                     menuItem.DropDown.BackColor = background;
                     menuItem.DropDown.ForeColor = text;
                     menuItem.DropDown.Renderer = CreateMenuRenderer();
+                    var dropDownMenu = menuItem.DropDown as ToolStripDropDownMenu;
+                    if (dropDownMenu != null)
+                    {
+                        dropDownMenu.ShowCheckMargin = false;
+                        dropDownMenu.ShowImageMargin = false;
+                    }
+                    menuItem.DropDown.Padding = new Padding(8, 8, 8, 8);
                     ApplyMenuTheme(menuItem.DropDownItems);
                 }
             }
@@ -686,10 +755,12 @@ namespace AudioTray
         private ToolStripRenderer CreateMenuRenderer()
         {
             var dark = config.DarkMode;
-            var background = dark ? Color.FromArgb(42, 42, 42) : Color.White;
-            var hover = dark ? Color.FromArgb(58, 58, 58) : Color.FromArgb(232, 232, 232);
-            var border = dark ? Color.FromArgb(82, 82, 82) : Color.FromArgb(180, 180, 180);
-            return new ThemedMenuRenderer(background, hover, border);
+            var background = dark ? Color.FromArgb(24, 26, 31) : Color.White;
+            var hover = dark ? Color.FromArgb(38, 43, 52) : Color.FromArgb(237, 242, 248);
+            var border = dark ? Color.FromArgb(72, 80, 94) : Color.FromArgb(205, 213, 224);
+            var text = dark ? Color.FromArgb(245, 247, 250) : Color.FromArgb(24, 26, 31);
+            var muted = dark ? Color.FromArgb(132, 141, 154) : Color.FromArgb(88, 96, 106);
+            return new ThemedMenuRenderer(background, hover, border, Color.FromArgb(78, 198, 255), text, muted);
         }
 
         private void SetCycleEnabled(string deviceId, bool enabled)
@@ -709,10 +780,13 @@ namespace AudioTray
 
         private void SetDeviceMark(string deviceId, string colorName)
         {
-            config.Marks.RemoveAll(mark => string.Equals(mark.DeviceId, deviceId, StringComparison.Ordinal));
+            var deviceName = GetKnownDeviceName(deviceId);
+            config.Marks.RemoveAll(mark =>
+                string.Equals(mark.DeviceId, deviceId, StringComparison.Ordinal) ||
+                (!string.IsNullOrWhiteSpace(deviceName) && string.Equals(mark.DeviceName, deviceName, StringComparison.Ordinal)));
             if (!string.IsNullOrWhiteSpace(colorName))
             {
-                config.Marks.Add(new DeviceMark { DeviceId = deviceId, ColorName = colorName });
+                config.Marks.Add(new DeviceMark { DeviceId = deviceId, DeviceName = deviceName, ColorName = colorName });
             }
 
             SaveConfig();
@@ -742,6 +816,11 @@ namespace AudioTray
 
         private void SwitchToDevice(string deviceId)
         {
+            if (string.Equals(deviceId, currentDeviceId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
             AudioManager.SetDefaultRenderDevice(deviceId);
             System.Threading.Thread.Sleep(150);
             RefreshDevices();
@@ -749,19 +828,34 @@ namespace AudioTray
             UpdateTrayIcon();
             if (settingsForm != null)
             {
-                settingsForm.RefreshFromContext();
+                settingsForm.RefreshCurrentDeviceStateFromContext();
             }
         }
 
         private string GetDeviceName(string deviceId)
         {
+            var deviceName = GetKnownDeviceName(deviceId);
+            return deviceName == null ? "Unknown audio device" : deviceName;
+        }
+
+        private string GetKnownDeviceName(string deviceId)
+        {
             var device = devices.FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal));
-            return device == null ? "Unknown audio device" : device.Name;
+            return device == null ? null : device.Name;
         }
 
         private string GetMark(string deviceId)
         {
             var mark = config.Marks.FirstOrDefault(m => string.Equals(m.DeviceId, deviceId, StringComparison.Ordinal));
+            if (mark == null)
+            {
+                var deviceName = GetKnownDeviceName(deviceId);
+                if (!string.IsNullOrWhiteSpace(deviceName))
+                {
+                    mark = config.Marks.FirstOrDefault(m => string.Equals(m.DeviceName, deviceName, StringComparison.Ordinal));
+                }
+            }
+
             return mark == null ? null : mark.ColorName;
         }
 
@@ -787,35 +881,39 @@ namespace AudioTray
                 var oldHandle = currentIconHandle;
 
                 var nextBitmap = new Bitmap(32, 32);
+                var foregroundColor = GetReadableForegroundColor(color);
+                var shadowColor = foregroundColor == Color.White ? Color.FromArgb(150, 0, 0, 0) : Color.FromArgb(120, 255, 255, 255);
                 using (var graphics = Graphics.FromImage(nextBitmap))
-                using (var textBrush = new SolidBrush(Color.White))
-                using (var shadowBrush = new SolidBrush(Color.FromArgb(150, 0, 0, 0)))
-                using (var dotBrush = new SolidBrush(color))
-                using (var dotPen = new Pen(Color.FromArgb(30, 30, 30), 2))
-                using (var muteShadowPen = new Pen(Color.FromArgb(150, 0, 0, 0), 3))
-                using (var mutePen = new Pen(Color.White, 3))
+                using (var backgroundPath = UiDrawing.RoundedRectangle(new Rectangle(1, 1, 30, 30), 7))
+                using (var backgroundBrush = new SolidBrush(color))
+                using (var borderPen = new Pen(Color.FromArgb(120, 30, 30, 30), 1))
+                using (var textBrush = new SolidBrush(foregroundColor))
+                using (var shadowBrush = new SolidBrush(shadowColor))
+                using (var muteShadowPen = new Pen(shadowColor, 3))
+                using (var mutePen = new Pen(foregroundColor, 3))
                 using (var font = new Font("Segoe UI", volumePercent >= 10 ? 21F : 25F, FontStyle.Bold, GraphicsUnit.Pixel))
                 using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                 {
-                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    graphics.SmoothingMode = SmoothingMode.AntiAlias;
                     graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
                     graphics.Clear(Color.Transparent);
+                    graphics.FillPath(backgroundBrush, backgroundPath);
+                    graphics.DrawPath(borderPen, backgroundPath);
 
                     if (muted)
                     {
-                        graphics.DrawEllipse(muteShadowPen, 7, 5, 17, 17);
-                        graphics.DrawEllipse(mutePen, 6, 4, 17, 17);
+                        graphics.DrawEllipse(muteShadowPen, 8, 7, 16, 16);
+                        graphics.DrawLine(muteShadowPen, 10, 23, 25, 8);
+                        graphics.DrawEllipse(mutePen, 7, 6, 16, 16);
+                        graphics.DrawLine(mutePen, 9, 22, 24, 7);
                     }
                     else
                     {
-                        var textRect = new RectangleF(-1, -1, 32, 27);
+                        var textRect = new RectangleF(-1, 1, 32, 29);
                         var displayText = volumePercent.ToString();
-                        graphics.DrawString(displayText, font, shadowBrush, new RectangleF(0, 0, 32, 27), format);
+                        graphics.DrawString(displayText, font, shadowBrush, new RectangleF(0, 2, 32, 29), format);
                         graphics.DrawString(displayText, font, textBrush, textRect, format);
                     }
-
-                    graphics.FillEllipse(dotBrush, 21, 21, 10, 10);
-                    graphics.DrawEllipse(dotPen, 21, 21, 10, 10);
                 }
 
                 var nextHandle = nextBitmap.GetHicon();
@@ -830,6 +928,12 @@ namespace AudioTray
             }
 
             SetNotifyText(string.Format("AudioTray: {0} ({1})", GetDeviceName(currentDeviceId), muted ? "\u5df2\u9759\u97f3" : volumePercent + "%"));
+        }
+
+        private static Color GetReadableForegroundColor(Color background)
+        {
+            var luminance = (background.R * 299 + background.G * 587 + background.B * 114) / 1000;
+            return luminance > 155 ? Color.FromArgb(30, 30, 30) : Color.White;
         }
 
         private static float SafeGetVolume()
@@ -953,6 +1057,11 @@ namespace AudioTray
             SwitchNextDevice();
         }
 
+        public void SelectDevice(string deviceId)
+        {
+            SwitchToDevice(deviceId);
+        }
+
         public void UpdateCommandName(string commandName)
         {
             config.CommandName = string.IsNullOrWhiteSpace(commandName) ? "Default command" : commandName.Trim();
@@ -1020,13 +1129,31 @@ namespace AudioTray
         }
     }
 
+    internal static class UiDrawing
+    {
+        public static GraphicsPath RoundedRectangle(Rectangle rect, int radius)
+        {
+            var diameter = radius * 2;
+            var path = new GraphicsPath();
+            path.AddArc(rect.Left, rect.Top, diameter, diameter, 180, 90);
+            path.AddArc(rect.Right - diameter, rect.Top, diameter, diameter, 270, 90);
+            path.AddArc(rect.Right - diameter, rect.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(rect.Left, rect.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+    }
+
     internal sealed class SettingsForm : Form
     {
         private readonly TrayAppContext context;
         private readonly Label hotkeyBox;
         private readonly Button editHotkeyButton;
-        private readonly Button settingsButton;
+        private readonly TopTabBar topTabs;
+        private readonly TableLayoutPanel mainPage;
+        private readonly TableLayoutPanel settingsPage;
         private readonly FlowLayoutPanel deviceList;
+        private readonly FlowLayoutPanel settingsList;
         private bool editingHotkey;
         private bool refreshing;
 
@@ -1037,9 +1164,9 @@ namespace AudioTray
             Text = "AudioTray";
             Icon = AppIcon.Load();
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(640, 460);
-            Size = new Size(680, 500);
-            BackColor = Color.FromArgb(30, 30, 30);
+            MinimumSize = new Size(700, 500);
+            Size = new Size(760, 540);
+            BackColor = Color.FromArgb(18, 19, 22);
             ForeColor = Color.White;
             Font = new Font("Segoe UI", 10F, FontStyle.Regular, GraphicsUnit.Point);
             DoubleBuffered = true;
@@ -1049,32 +1176,60 @@ namespace AudioTray
             var root = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(30, 30, 30),
+                BackColor = Color.FromArgb(18, 19, 22),
                 ColumnCount = 1,
-                RowCount = 1
+                RowCount = 2
             };
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             Controls.Add(root);
 
-            var content = new TableLayoutPanel
+            var topBar = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(24, 20, 24, 20),
-                BackColor = Color.FromArgb(35, 35, 35),
-                ColumnCount = 4,
-                RowCount = 2
+                Padding = new Padding(28, 18, 28, 10),
+                BackColor = Color.FromArgb(18, 19, 22),
+                ColumnCount = 2,
+                RowCount = 1
             };
-            content.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
-            content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            content.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 84));
-            content.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 84));
-            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-            content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.Controls.Add(content, 0, 0);
+            topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
+            root.Controls.Add(topBar, 0, 0);
 
-            content.Controls.Add(MakeFieldLabel("\u5feb\u6377\u952e"), 0, 0);
-            hotkeyBox = MakeHotkeyDisplay();
-            content.Controls.Add(hotkeyBox, 1, 0);
+            topTabs = new TopTabBar
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0),
+                BackColor = Color.FromArgb(18, 19, 22),
+                ForeColor = Color.FromArgb(176, 184, 196),
+                ActiveColor = Color.FromArgb(78, 198, 255),
+                TextColor = Color.FromArgb(176, 184, 196),
+                ActiveTextColor = Color.White
+            };
+            topTabs.SelectedIndexChanged += delegate
+            {
+                if (topTabs.SelectedIndex == 0)
+                {
+                    ShowMainPage();
+                }
+                else
+                {
+                    ShowSettingsPage();
+                }
+            };
+            topBar.Controls.Add(topTabs, 1, 0);
+
+            mainPage = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(28, 0, 28, 24),
+                BackColor = Color.FromArgb(18, 19, 22),
+                ColumnCount = 1,
+                RowCount = 1
+            };
+            mainPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            mainPage.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.Controls.Add(mainPage, 0, 1);
 
             editHotkeyButton = MakeButton("\u4fee\u6539", 10.5F);
             editHotkeyButton.Click += delegate
@@ -1083,11 +1238,7 @@ namespace AudioTray
                 hotkeyBox.Text = "\u8bf7\u6309\u4e0b\u5feb\u6377\u952e...";
                 Focus();
             };
-            content.Controls.Add(editHotkeyButton, 2, 0);
-
-            settingsButton = MakeButton("\u8bbe\u7f6e", 10.5F);
-            settingsButton.Click += delegate { ShowSettingsMenu(settingsButton); };
-            content.Controls.Add(settingsButton, 3, 0);
+            hotkeyBox = MakeHotkeyDisplay();
 
             deviceList = new FlowLayoutPanel
             {
@@ -1095,12 +1246,36 @@ namespace AudioTray
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents = false,
                 AutoScroll = true,
-                BackColor = Color.FromArgb(35, 35, 35),
-                Padding = new Padding(0, 12, 0, 0)
+                BackColor = Color.FromArgb(18, 19, 22),
+                Padding = new Padding(0, 16, 0, 0)
             };
             deviceList.Resize += delegate { ResizeDeviceRows(); };
-            content.SetColumnSpan(deviceList, 4);
-            content.Controls.Add(deviceList, 0, 1);
+            mainPage.Controls.Add(deviceList, 0, 0);
+
+            settingsPage = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(28, 0, 28, 24),
+                BackColor = Color.FromArgb(18, 19, 22),
+                ColumnCount = 1,
+                RowCount = 1,
+                Visible = false
+            };
+            settingsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            settingsPage.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.Controls.Add(settingsPage, 0, 1);
+
+            settingsList = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoScroll = true,
+                BackColor = Color.FromArgb(18, 19, 22),
+                Padding = new Padding(0, 16, 0, 0)
+            };
+            settingsList.Resize += delegate { ResizeSettingsRows(); };
+            settingsPage.Controls.Add(settingsList, 0, 0);
 
             Shown += delegate
             {
@@ -1120,14 +1295,14 @@ namespace AudioTray
         public void ApplyTheme()
         {
             var dark = context.Config.DarkMode;
-            var window = dark ? Color.FromArgb(30, 30, 30) : Color.FromArgb(245, 245, 245);
-            var surface = dark ? Color.FromArgb(35, 35, 35) : Color.FromArgb(238, 238, 238);
-            var panel = dark ? Color.FromArgb(48, 48, 48) : Color.White;
-            var input = dark ? Color.FromArgb(49, 49, 49) : Color.White;
-            var text = dark ? Color.White : Color.FromArgb(30, 30, 30);
-            var secondary = dark ? Color.FromArgb(215, 215, 215) : Color.FromArgb(80, 80, 80);
-            var button = dark ? Color.FromArgb(42, 42, 42) : Color.FromArgb(230, 230, 230);
-            var buttonHover = dark ? Color.FromArgb(56, 56, 56) : Color.FromArgb(218, 218, 218);
+            var window = dark ? Color.FromArgb(18, 19, 22) : Color.FromArgb(246, 247, 249);
+            var surface = dark ? Color.FromArgb(18, 19, 22) : Color.FromArgb(246, 247, 249);
+            var panel = dark ? Color.FromArgb(31, 33, 38) : Color.White;
+            var input = dark ? Color.FromArgb(24, 26, 31) : Color.White;
+            var text = dark ? Color.FromArgb(245, 247, 250) : Color.FromArgb(24, 26, 31);
+            var secondary = dark ? Color.FromArgb(176, 184, 196) : Color.FromArgb(88, 96, 106);
+            var button = dark ? Color.FromArgb(38, 42, 49) : Color.FromArgb(232, 236, 242);
+            var buttonHover = dark ? Color.FromArgb(48, 54, 63) : Color.FromArgb(220, 226, 235);
 
             BackColor = window;
             ForeColor = text;
@@ -1145,7 +1320,10 @@ namespace AudioTray
                 }
                 else if (control is DeviceRowPanel)
                 {
-                    control.BackColor = panel;
+                    var row = (DeviceRowPanel)control;
+                    row.BackColor = panel;
+                    row.BorderColor = context.Config.DarkMode ? Color.FromArgb(45, 50, 58) : Color.FromArgb(220, 225, 232);
+                    row.CurrentBorderColor = Color.FromArgb(78, 198, 255);
                     foreach (Control child in control.Controls)
                     {
                         child.BackColor = panel;
@@ -1158,94 +1336,106 @@ namespace AudioTray
                     var buttonControl = (Button)control;
                     buttonControl.FlatAppearance.MouseOverBackColor = buttonHover;
                     buttonControl.FlatAppearance.MouseDownBackColor = buttonHover;
+                    var roundedButton = control as RoundedButton;
+                    if (roundedButton != null)
+                    {
+                        var activeNav = control.Tag as string == "activeNav";
+                        roundedButton.SurfaceColor = activeNav ? Color.FromArgb(28, 78, 105) : button;
+                        roundedButton.HoverColor = activeNav ? Color.FromArgb(35, 91, 122) : buttonHover;
+                        roundedButton.BorderColor = activeNav ? Color.FromArgb(78, 198, 255) : (context.Config.DarkMode ? Color.FromArgb(66, 73, 84) : Color.FromArgb(204, 211, 222));
+                        roundedButton.TextColor = activeNav || context.Config.DarkMode ? Color.White : text;
+                    }
+                }
+                else if (control is TopTabBar)
+                {
+                    var tabBar = (TopTabBar)control;
+                    tabBar.BackColor = surface;
+                    tabBar.TextColor = secondary;
+                    tabBar.ActiveTextColor = text;
+                    tabBar.ActiveColor = Color.FromArgb(78, 198, 255);
+                    tabBar.Invalidate();
                 }
                 else if (control is ColorDotButton)
                 {
                     var colorButton = (ColorDotButton)control;
                     colorButton.BackColor = panel;
-                    colorButton.SurfaceColor = button;
-                    colorButton.BorderColor = context.Config.DarkMode ? Color.FromArgb(78, 78, 78) : Color.FromArgb(196, 196, 196);
+                    colorButton.SurfaceColor = input;
+                    colorButton.BorderColor = context.Config.DarkMode ? Color.FromArgb(66, 73, 84) : Color.FromArgb(204, 211, 222);
                     colorButton.Invalidate();
                 }
                 else if (control == hotkeyBox)
                 {
                     control.BackColor = input;
                     control.ForeColor = text;
+                    var hotkeyDisplay = control as RoundedLabel;
+                    if (hotkeyDisplay != null)
+                    {
+                        hotkeyDisplay.SurfaceColor = input;
+                        hotkeyDisplay.BorderColor = context.Config.DarkMode ? Color.FromArgb(58, 65, 76) : Color.FromArgb(205, 213, 224);
+                        hotkeyDisplay.TextColor = text;
+                    }
                 }
                 else if (control is Label)
                 {
-                    control.ForeColor = text;
+                    control.ForeColor = control.Tag as string == "secondary" ? secondary : text;
+                    var multilineLabel = control as MultilineCenterLabel;
+                    if (multilineLabel != null)
+                    {
+                        multilineLabel.TextColor = control.ForeColor;
+                        multilineLabel.Invalidate();
+                    }
                 }
 
                 ApplyThemeToControls(control.Controls, surface, panel, input, text, secondary, button, buttonHover);
             }
         }
 
-        private void ShowSettingsMenu(Control anchor)
+        private void ShowMainPage()
         {
-            var dark = context.Config.DarkMode;
-            var menu = new ContextMenuStrip
-            {
-                BackColor = dark ? Color.FromArgb(42, 42, 42) : Color.White,
-                ForeColor = dark ? Color.White : Color.FromArgb(30, 30, 30),
-                Renderer = dark
-                    ? (ToolStripRenderer)new ThemedMenuRenderer(Color.FromArgb(42, 42, 42), Color.FromArgb(58, 58, 58), Color.FromArgb(82, 82, 82))
-                    : new ThemedMenuRenderer(Color.White, Color.FromArgb(232, 232, 232), Color.FromArgb(180, 180, 180)),
-                ShowImageMargin = true
-            };
-            var darkItem = MakeSettingMenuItem("\u6df1\u8272\u6a21\u5f0f", context.Config.DarkMode);
-            darkItem.Click += delegate
-            {
-                context.SetDarkMode(!context.Config.DarkMode);
-            };
-            menu.Items.Add(darkItem);
-
-            var startupItem = MakeSettingMenuItem("\u5f00\u673a\u81ea\u52a8\u542f\u52a8", context.IsAutoStartEnabled());
-            startupItem.Click += delegate
-            {
-                context.SetAutoStart(!context.IsAutoStartEnabled());
-            };
-            menu.Items.Add(startupItem);
-
-            menu.Show(anchor, new Point(anchor.Width - 220, anchor.Height + 4));
+            topTabs.SelectedIndex = 0;
+            settingsPage.Visible = false;
+            mainPage.Visible = true;
+            mainPage.BringToFront();
+            ActiveControl = deviceList;
         }
 
-        private ToolStripMenuItem MakeSettingMenuItem(string text, bool selected)
+        private void ShowSettingsPage()
         {
-            return new ToolStripMenuItem(text)
-            {
-                Checked = selected,
-                ForeColor = context.Config.DarkMode ? Color.White : Color.FromArgb(30, 30, 30),
-                BackColor = context.Config.DarkMode ? Color.FromArgb(42, 42, 42) : Color.White,
-                AutoSize = false,
-                Size = new Size(220, 34),
-                Image = MakeCheckIcon(selected)
-            };
+            topTabs.SelectedIndex = 1;
+            RefreshSettingsPage();
+            mainPage.Visible = false;
+            settingsPage.Visible = true;
+            settingsPage.BringToFront();
+            ApplyTheme();
+            ActiveControl = settingsList;
         }
 
-        private static Bitmap MakeCheckIcon(bool selected)
+        private void RefreshSettingsPage()
         {
-            var bitmap = new Bitmap(16, 16);
-            using (var graphics = Graphics.FromImage(bitmap))
-            using (var border = new Pen(selected ? Color.FromArgb(78, 198, 255) : Color.FromArgb(135, 135, 135), 1))
-            using (var fill = new SolidBrush(selected ? Color.FromArgb(78, 198, 255) : Color.Transparent))
-            using (var tick = new Pen(Color.FromArgb(12, 28, 36), 2))
+            if (settingsList == null) return;
+
+            settingsList.SuspendLayout();
+            try
             {
-                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                graphics.Clear(Color.Transparent);
-                graphics.FillRectangle(fill, 2, 2, 12, 12);
-                graphics.DrawRectangle(border, 2, 2, 12, 12);
-                if (selected)
+                settingsList.Controls.Clear();
+                RefreshHotkeyText();
+                settingsList.Controls.Add(MakeHotkeySettingRow());
+                settingsList.Controls.Add(MakeSettingRow("\u6df1\u8272\u6a21\u5f0f", context.Config.DarkMode, delegate(bool enabled)
                 {
-                    graphics.DrawLines(tick, new[]
-                    {
-                        new Point(5, 8),
-                        new Point(8, 11),
-                        new Point(12, 5)
-                    });
-                }
+                    context.SetDarkMode(enabled);
+                    RefreshSettingsPage();
+                }));
+                settingsList.Controls.Add(MakeSettingRow("\u5f00\u673a\u81ea\u52a8\u542f\u52a8", context.IsAutoStartEnabled(), delegate(bool enabled)
+                {
+                    context.SetAutoStart(enabled);
+                    RefreshSettingsPage();
+                }));
+                ResizeSettingsRows();
             }
-            return bitmap;
+            finally
+            {
+                settingsList.ResumeLayout();
+            }
         }
 
         public void RefreshFromContext()
@@ -1263,6 +1453,10 @@ namespace AudioTray
                     deviceList.Controls.Add(MakeDeviceRow(device));
                 }
                 ResizeDeviceRows();
+                if (settingsPage.Visible)
+                {
+                    RefreshSettingsPage();
+                }
                 ApplyTheme();
             }
             finally
@@ -1272,23 +1466,56 @@ namespace AudioTray
             }
         }
 
+        public void RefreshCurrentDeviceStateFromContext()
+        {
+            if (IsDisposed) return;
+
+            var foundCurrent = false;
+            foreach (Control control in deviceList.Controls)
+            {
+                var row = control as DeviceRowPanel;
+                if (row == null)
+                {
+                    continue;
+                }
+
+                var deviceId = row.Tag as string;
+                var isCurrent = string.Equals(deviceId, context.CurrentDeviceId, StringComparison.Ordinal);
+                foundCurrent = foundCurrent || isCurrent;
+                if (row.IsCurrent != isCurrent)
+                {
+                    row.IsCurrent = isCurrent;
+                    row.Invalidate();
+                }
+            }
+
+            if (!foundCurrent)
+            {
+                RefreshFromContext();
+            }
+        }
+
         private Control MakeDeviceRow(AudioDevice device)
         {
             var row = new DeviceRowPanel
             {
                 Width = Math.Max(560, deviceList.ClientSize.Width - 28),
-                Height = 96,
-                Margin = new Padding(0, 0, 0, 10),
-                BackColor = Color.FromArgb(48, 48, 48),
+                Height = 104,
+                Margin = new Padding(0, 0, 0, 12),
+                BackColor = Color.FromArgb(31, 33, 38),
+                BorderColor = Color.FromArgb(45, 50, 58),
+                CurrentBorderColor = Color.FromArgb(78, 198, 255),
                 IsCurrent = string.Equals(device.Id, context.CurrentDeviceId, StringComparison.Ordinal)
             };
+            row.Tag = device.Id;
+            row.Cursor = Cursors.Hand;
 
             var selected = context.Config.CycleDeviceIds.Contains(device.Id);
             var check = new CheckTile
             {
                 Checked = selected,
-                Location = new Point(22, 33),
-                Size = new Size(30, 30)
+                Location = new Point(22, 36),
+                Size = new Size(32, 32)
             };
             check.CheckedChanged += delegate
             {
@@ -1299,35 +1526,29 @@ namespace AudioTray
             };
             row.Controls.Add(check);
 
-            var title = new Label
-            {
-                Text = GuessDeviceKind(device.Name),
-                AutoSize = false,
-                Location = new Point(78, 18),
-                Size = new Size(360, 28),
-                ForeColor = Color.White,
-                BackColor = Color.FromArgb(48, 48, 48),
-                Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold, GraphicsUnit.Point)
-            };
-            row.Controls.Add(title);
-
-            var subtitle = new Label
+            var title = new MultilineCenterLabel
             {
                 Text = device.Name,
                 AutoSize = false,
-                Location = new Point(78, 52),
-                Size = new Size(360, 28),
-                ForeColor = Color.FromArgb(215, 215, 215),
-                BackColor = Color.FromArgb(48, 48, 48),
-                Font = new Font("Segoe UI", 9.8F, FontStyle.Regular, GraphicsUnit.Point)
+                Location = new Point(78, 20),
+                Size = new Size(Math.Max(180, row.Width - 166), 64),
+                ForeColor = Color.FromArgb(245, 247, 250),
+                BackColor = Color.FromArgb(31, 33, 38),
+                Font = new Font("Microsoft YaHei UI", 9.4F, FontStyle.Bold, GraphicsUnit.Point),
+                TextColor = Color.FromArgb(245, 247, 250)
             };
-            row.Controls.Add(subtitle);
+            row.Controls.Add(title);
+
+            EventHandler selectDevice = delegate { context.SelectDevice(device.Id); };
+            row.Click += selectDevice;
+            title.Click += selectDevice;
+            title.Cursor = Cursors.Hand;
 
             var colorButton = new ColorDotButton
             {
-                Size = new Size(40, 40),
+                Size = new Size(46, 46),
                 Anchor = AnchorStyles.Top | AnchorStyles.Right,
-                Location = new Point(row.Width - 58, 28),
+                Location = new Point(row.Width - 66, 29),
                 DotColor = GetDeviceColor(device.Id),
                 ToolTipText = "\u9009\u62e9\u989c\u8272"
             };
@@ -1335,75 +1556,156 @@ namespace AudioTray
             row.Controls.Add(colorButton);
             row.Resize += delegate
             {
-                colorButton.Location = new Point(row.Width - 58, 28);
-                title.Width = Math.Max(180, row.Width - 158);
-                subtitle.Width = Math.Max(180, row.Width - 158);
+                colorButton.Location = new Point(row.Width - 66, 29);
+                title.Width = Math.Max(180, row.Width - 166);
+                title.Height = 64;
             };
 
-            row.DoubleClick += delegate { context.TestSwitch(); };
+            return row;
+        }
+
+        private Control MakeHotkeySettingRow()
+        {
+            var row = new DeviceRowPanel
+            {
+                Width = Math.Max(560, settingsList.ClientSize.Width - 28),
+                Height = 92,
+                Margin = new Padding(0, 0, 0, 12),
+                BackColor = Color.FromArgb(31, 33, 38),
+                BorderColor = Color.FromArgb(45, 50, 58),
+                CurrentBorderColor = Color.FromArgb(78, 198, 255),
+                IsCurrent = false
+            };
+
+            var title = new Label
+            {
+                Text = "\u5feb\u6377\u952e",
+                AutoSize = false,
+                Location = new Point(24, 32),
+                Size = new Size(96, 28),
+                ForeColor = Color.FromArgb(245, 247, 250),
+                BackColor = Color.FromArgb(31, 33, 38),
+                Font = new Font("Microsoft YaHei UI", 9.8F, FontStyle.Bold, GraphicsUnit.Point)
+            };
+            row.Controls.Add(title);
+
+            hotkeyBox.Dock = DockStyle.None;
+            hotkeyBox.Location = new Point(128, 25);
+            hotkeyBox.Size = new Size(Math.Max(180, row.Width - 250), 42);
+            row.Controls.Add(hotkeyBox);
+
+            editHotkeyButton.Dock = DockStyle.None;
+            editHotkeyButton.Location = new Point(row.Width - 98, 25);
+            editHotkeyButton.Size = new Size(74, 42);
+            row.Controls.Add(editHotkeyButton);
+
+            row.Resize += delegate
+            {
+                hotkeyBox.Size = new Size(Math.Max(180, row.Width - 250), 42);
+                editHotkeyButton.Location = new Point(row.Width - 98, 25);
+            };
+
+            return row;
+        }
+
+        private Control MakeSettingRow(string titleText, bool selected, Action<bool> apply)
+        {
+            var row = new DeviceRowPanel
+            {
+                Width = Math.Max(560, settingsList.ClientSize.Width - 28),
+                Height = 92,
+                Margin = new Padding(0, 0, 0, 12),
+                BackColor = Color.FromArgb(31, 33, 38),
+                BorderColor = Color.FromArgb(45, 50, 58),
+                CurrentBorderColor = Color.FromArgb(78, 198, 255),
+                IsCurrent = false
+            };
+
+            var title = new Label
+            {
+                Text = titleText,
+                AutoSize = false,
+                Location = new Point(24, 32),
+                Size = new Size(420, 28),
+                ForeColor = Color.FromArgb(245, 247, 250),
+                BackColor = Color.FromArgb(31, 33, 38),
+                Font = new Font("Microsoft YaHei UI", 9.8F, FontStyle.Bold, GraphicsUnit.Point)
+            };
+            row.Controls.Add(title);
+
+            var check = new CheckTile
+            {
+                Checked = selected,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Location = new Point(row.Width - 58, 30),
+                Size = new Size(32, 32)
+            };
+            check.CheckedChanged += delegate
+            {
+                if (!refreshing)
+                {
+                    apply(check.Checked);
+                }
+            };
+            row.Controls.Add(check);
+
+            EventHandler toggleSetting = delegate { check.Checked = !check.Checked; };
+            row.Click += toggleSetting;
+            title.Click += toggleSetting;
+            row.Cursor = Cursors.Hand;
+            title.Cursor = Cursors.Hand;
+
+            row.Resize += delegate
+            {
+                check.Location = new Point(row.Width - 58, 30);
+                title.Width = Math.Max(220, row.Width - 110);
+            };
+
             return row;
         }
 
         private void ShowColorMenu(Control anchor, string deviceId)
         {
             var dark = context.Config.DarkMode;
-            var menuBack = dark ? Color.FromArgb(42, 42, 42) : Color.White;
-            var menuText = dark ? Color.White : Color.FromArgb(30, 30, 30);
-            var menuHover = dark ? Color.FromArgb(58, 58, 58) : Color.FromArgb(232, 232, 232);
-            var menuBorder = dark ? Color.FromArgb(82, 82, 82) : Color.FromArgb(180, 180, 180);
-            var menu = new ContextMenuStrip
-            {
-                BackColor = menuBack,
-                ForeColor = menuText,
-                ShowImageMargin = true,
-                Renderer = new ThemedMenuRenderer(menuBack, menuHover, menuBorder)
-            };
             var current = GetDeviceMark(deviceId);
-
-            var noneItem = MakeColorMenuItem("\u65e0", Color.FromArgb(120, 120, 120), string.IsNullOrWhiteSpace(current));
-            noneItem.Click += delegate { context.ApplyDeviceMark(deviceId, null); };
-            menu.Items.Add(noneItem);
-            menu.Items.Add(new ToolStripSeparator());
+            var choices = new List<ColorChoice>
+            {
+                new ColorChoice(null, "\u65e0", Color.FromArgb(120, 120, 120))
+            };
 
             foreach (var colorName in context.KnownColors.Keys)
             {
-                var localName = colorName;
-                var item = MakeColorMenuItem(GetColorDisplayName(colorName), context.KnownColors[colorName], string.Equals(current, colorName, StringComparison.Ordinal));
-                item.Click += delegate { context.ApplyDeviceMark(deviceId, localName); };
-                menu.Items.Add(item);
+                choices.Add(new ColorChoice(colorName, GetColorDisplayName(colorName), context.KnownColors[colorName]));
             }
 
-            menu.Show(anchor, new Point(anchor.Width - 180, anchor.Height + 2));
-        }
-
-        private ToolStripMenuItem MakeColorMenuItem(string text, Color color, bool selected)
-        {
-            var dark = context.Config.DarkMode;
-            var item = new ToolStripMenuItem(text)
+            var dropDown = new ToolStripDropDown
             {
-                Checked = selected,
-                ForeColor = dark ? Color.White : Color.FromArgb(30, 30, 30),
-                BackColor = dark ? Color.FromArgb(42, 42, 42) : Color.White,
                 AutoSize = false,
-                Size = new Size(180, 30),
-                Image = MakeColorSwatch(color)
+                Padding = Padding.Empty,
+                Margin = Padding.Empty,
+                BackColor = Color.Transparent
             };
-            return item;
-        }
 
-        private static Bitmap MakeColorSwatch(Color color)
-        {
-            var bitmap = new Bitmap(16, 16);
-            using (var graphics = Graphics.FromImage(bitmap))
-            using (var brush = new SolidBrush(color))
-            using (var pen = new Pen(Color.FromArgb(180, 180, 180), 1))
+            var palette = new ColorPalettePanel(choices, current, dark)
             {
-                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                graphics.Clear(Color.Transparent);
-                graphics.FillEllipse(brush, 2, 2, 12, 12);
-                graphics.DrawEllipse(pen, 2, 2, 12, 12);
-            }
-            return bitmap;
+                Size = new Size(176, 236)
+            };
+            palette.ColorSelected += delegate(object sender, ColorSelectedEventArgs e)
+            {
+                context.ApplyDeviceMark(deviceId, e.ColorName);
+                dropDown.Close(ToolStripDropDownCloseReason.ItemClicked);
+            };
+
+            var host = new ToolStripControlHost(palette)
+            {
+                AutoSize = false,
+                Size = palette.Size,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty
+            };
+            dropDown.Items.Add(host);
+            dropDown.Size = palette.Size;
+            dropDown.Show(anchor, new Point(anchor.Width - palette.Width, anchor.Height + 6));
         }
 
         private static string GetColorDisplayName(string colorName)
@@ -1422,6 +1724,15 @@ namespace AudioTray
         private string GetDeviceMark(string deviceId)
         {
             var mark = context.Config.Marks.FirstOrDefault(m => string.Equals(m.DeviceId, deviceId, StringComparison.Ordinal));
+            if (mark == null)
+            {
+                var device = context.Devices.FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal));
+                if (device != null)
+                {
+                    mark = context.Config.Marks.FirstOrDefault(m => string.Equals(m.DeviceName, device.Name, StringComparison.Ordinal));
+                }
+            }
+
             return mark == null ? null : mark.ColorName;
         }
 
@@ -1429,7 +1740,7 @@ namespace AudioTray
         {
             var mark = GetDeviceMark(deviceId);
             Color color;
-            return mark != null && context.KnownColors.TryGetValue(mark, out color) ? color : Color.FromArgb(78, 198, 255);
+            return mark != null && context.KnownColors.TryGetValue(mark, out color) ? color : Color.FromArgb(120, 120, 120);
         }
 
         private static string GuessDeviceKind(string name)
@@ -1477,6 +1788,16 @@ namespace AudioTray
             }
         }
 
+        private void ResizeSettingsRows()
+        {
+            if (settingsList == null) return;
+
+            foreach (Control control in settingsList.Controls)
+            {
+                control.Width = Math.Max(560, settingsList.ClientSize.Width - 28);
+            }
+        }
+
         private Label MakeFieldLabel(string text)
         {
             return new Label
@@ -1484,8 +1805,9 @@ namespace AudioTray
                 Text = text,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
-                ForeColor = Color.FromArgb(225, 225, 225),
-                Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Regular, GraphicsUnit.Point)
+                ForeColor = Color.FromArgb(176, 184, 196),
+                Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point),
+                Tag = "secondary"
             };
         }
 
@@ -1504,31 +1826,39 @@ namespace AudioTray
 
         private Label MakeHotkeyDisplay()
         {
-            return new Label
+            return new RoundedLabel
             {
-                Dock = DockStyle.Fill,
-                BorderStyle = BorderStyle.FixedSingle,
-                BackColor = Color.FromArgb(49, 49, 49),
+                Dock = DockStyle.None,
+                BorderStyle = BorderStyle.None,
+                BackColor = Color.FromArgb(24, 26, 31),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10.5F, FontStyle.Regular, GraphicsUnit.Point),
-                Margin = new Padding(0, 8, 10, 8),
+                Font = new Font("Segoe UI", 10F, FontStyle.Bold, GraphicsUnit.Point),
+                Margin = new Padding(0),
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(8, 0, 8, 0)
+                Padding = new Padding(12, 0, 12, 0),
+                SurfaceColor = Color.FromArgb(24, 26, 31),
+                BorderColor = Color.FromArgb(58, 65, 76),
+                TextColor = Color.White
             };
         }
 
         private Button MakeButton(string text, float fontSize)
         {
-            var button = new Button
+            var button = new RoundedButton
             {
                 Text = text,
                 Dock = DockStyle.Fill,
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(42, 42, 42),
+                BackColor = Color.FromArgb(38, 42, 49),
                 ForeColor = Color.White,
-                Margin = new Padding(0, 8, 4, 8),
-                Font = new Font("Segoe UI", fontSize, FontStyle.Regular, GraphicsUnit.Point)
+                Margin = new Padding(0, 7, 6, 7),
+                Font = new Font("Microsoft YaHei UI", fontSize, FontStyle.Regular, GraphicsUnit.Point),
+                SurfaceColor = Color.FromArgb(38, 42, 49),
+                HoverColor = Color.FromArgb(48, 54, 63),
+                BorderColor = Color.FromArgb(66, 73, 84),
+                TextColor = Color.White
             };
+            button.FlatAppearance.BorderSize = 0;
             button.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 70);
             button.FlatAppearance.MouseOverBackColor = Color.FromArgb(56, 56, 56);
             button.FlatAppearance.MouseDownBackColor = Color.FromArgb(56, 56, 56);
@@ -1536,47 +1866,324 @@ namespace AudioTray
         }
     }
 
+    internal sealed class RoundedLabel : Label
+    {
+        public Color SurfaceColor { get; set; }
+        public Color BorderColor { get; set; }
+        public Color TextColor { get; set; }
+
+        public RoundedLabel()
+        {
+            DoubleBuffered = true;
+            SurfaceColor = Color.FromArgb(24, 26, 31);
+            BorderColor = Color.FromArgb(58, 65, 76);
+            TextColor = Color.White;
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            var parentColor = Parent == null ? BackColor : Parent.BackColor;
+            e.Graphics.Clear(parentColor);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (var path = UiDrawing.RoundedRectangle(rect, 7))
+            using (var surface = new SolidBrush(SurfaceColor))
+            using (var border = new Pen(BorderColor, 1))
+            {
+                e.Graphics.FillPath(surface, path);
+                e.Graphics.DrawPath(border, path);
+            }
+
+            var textRect = new Rectangle(Padding.Left, 0, Math.Max(0, Width - Padding.Left - Padding.Right), Height);
+            TextRenderer.DrawText(e.Graphics, Text, Font, textRect, TextColor, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+        }
+    }
+
+    internal sealed class MultilineCenterLabel : Label
+    {
+        public Color TextColor { get; set; }
+
+        public MultilineCenterLabel()
+        {
+            DoubleBuffered = true;
+            TextColor = Color.White;
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            var parentColor = Parent == null ? BackColor : Parent.BackColor;
+            e.Graphics.Clear(parentColor);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var singleLineFlags = TextFormatFlags.Left | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding;
+            var measuredSingleLine = TextRenderer.MeasureText(e.Graphics, Text, Font, new Size(int.MaxValue, Height), singleLineFlags);
+            var wraps = measuredSingleLine.Width > Width;
+            var flags = wraps
+                ? TextFormatFlags.Left | TextFormatFlags.WordBreak | TextFormatFlags.NoPadding
+                : singleLineFlags;
+            var proposed = wraps ? new Size(Math.Max(1, Width), Math.Max(1, Height)) : new Size(Math.Max(1, Width), Height);
+            var measured = TextRenderer.MeasureText(e.Graphics, Text, Font, proposed, flags);
+            var y = Math.Max(0, (Height - measured.Height) / 2);
+            var rect = new Rectangle(0, y, Width, Height - y);
+            TextRenderer.DrawText(e.Graphics, Text, Font, rect, TextColor, flags);
+        }
+    }
+
+    internal sealed class RoundedButton : Button
+    {
+        private bool hovered;
+        private bool pressed;
+
+        public Color SurfaceColor { get; set; }
+        public Color HoverColor { get; set; }
+        public Color BorderColor { get; set; }
+        public Color TextColor { get; set; }
+
+        public RoundedButton()
+        {
+            DoubleBuffered = true;
+            Cursor = Cursors.Hand;
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            SurfaceColor = Color.FromArgb(38, 42, 49);
+            HoverColor = Color.FromArgb(48, 54, 63);
+            BorderColor = Color.FromArgb(66, 73, 84);
+            TextColor = Color.White;
+        }
+
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            hovered = true;
+            Invalidate();
+            base.OnMouseEnter(e);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            hovered = false;
+            pressed = false;
+            Invalidate();
+            base.OnMouseLeave(e);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs mevent)
+        {
+            pressed = true;
+            Invalidate();
+            base.OnMouseDown(mevent);
+        }
+
+        protected override void OnMouseUp(MouseEventArgs mevent)
+        {
+            pressed = false;
+            Invalidate();
+            base.OnMouseUp(mevent);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var fill = hovered || pressed ? HoverColor : SurfaceColor;
+            var textOffset = pressed ? 1 : 0;
+            var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (var path = UiDrawing.RoundedRectangle(rect, 7))
+            using (var brush = new SolidBrush(fill))
+            using (var border = new Pen(BorderColor, 1))
+            {
+                e.Graphics.FillPath(brush, path);
+                e.Graphics.DrawPath(border, path);
+            }
+
+            var textRect = new Rectangle(textOffset, textOffset, Width, Height);
+            TextRenderer.DrawText(e.Graphics, Text, Font, textRect, TextColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs pevent)
+        {
+            var parentColor = Parent == null ? BackColor : Parent.BackColor;
+            pevent.Graphics.Clear(parentColor);
+        }
+    }
+
+    internal sealed class TopTabBar : Control
+    {
+        private int selectedIndex;
+        private readonly string[] labels = { "\u8bbe\u5907", "\u8bbe\u7f6e" };
+
+        public event EventHandler SelectedIndexChanged;
+
+        public int SelectedIndex
+        {
+            get { return selectedIndex; }
+            set
+            {
+                var next = Math.Max(0, Math.Min(labels.Length - 1, value));
+                if (selectedIndex == next)
+                {
+                    return;
+                }
+
+                selectedIndex = next;
+                Invalidate();
+                if (SelectedIndexChanged != null)
+                {
+                    SelectedIndexChanged(this, EventArgs.Empty);
+                }
+            }
+        }
+
+        public Color TextColor { get; set; }
+        public Color ActiveTextColor { get; set; }
+        public Color ActiveColor { get; set; }
+
+        public TopTabBar()
+        {
+            DoubleBuffered = true;
+            Cursor = Cursors.Hand;
+            TextColor = Color.FromArgb(176, 184, 196);
+            ActiveTextColor = Color.White;
+            ActiveColor = Color.FromArgb(78, 198, 255);
+            Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold, GraphicsUnit.Point);
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            SelectedIndex = e.X < Width / 2 ? 0 : 1;
+            base.OnMouseClick(e);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            e.Graphics.Clear(BackColor);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var tabWidth = Width / labels.Length;
+            for (var i = 0; i < labels.Length; i++)
+            {
+                var rect = new Rectangle(i * tabWidth, 0, tabWidth, Height - 1);
+                var textRect = new Rectangle(rect.Left + 10, 0, Math.Max(0, rect.Width - 20), Math.Max(0, Height - 10));
+                var active = i == selectedIndex;
+                TextRenderer.DrawText(
+                    e.Graphics,
+                    labels[i],
+                    Font,
+                    textRect,
+                    active ? ActiveTextColor : TextColor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+                if (active)
+                {
+                    using (var pen = new Pen(ActiveColor, 2))
+                    {
+                        var y = Height - 3;
+                        e.Graphics.DrawLine(pen, rect.Left + 26, y, rect.Right - 26, y);
+                    }
+                }
+            }
+        }
+    }
+
     internal sealed class DeviceRowPanel : Panel
     {
         public bool IsCurrent { get; set; }
+        public Color BorderColor { get; set; }
+        public Color CurrentBorderColor { get; set; }
 
-        public DeviceRowPanel() { DoubleBuffered = true; }
+        public DeviceRowPanel()
+        {
+            DoubleBuffered = true;
+            BorderColor = Color.FromArgb(45, 50, 58);
+            CurrentBorderColor = Color.FromArgb(78, 198, 255);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            var parentColor = Parent == null ? BackColor : Parent.BackColor;
+            e.Graphics.Clear(parentColor);
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
-            using (var brush = new SolidBrush(BackColor)) e.Graphics.FillRectangle(brush, ClientRectangle);
-            if (IsCurrent)
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (var path = UiDrawing.RoundedRectangle(rect, 8))
+            using (var brush = new SolidBrush(BackColor))
+            using (var border = new Pen(IsCurrent ? CurrentBorderColor : BorderColor, IsCurrent ? 1.4F : 1F))
             {
-                using (var brush = new SolidBrush(Color.FromArgb(0, 160, 20)))
-                {
-                    e.Graphics.FillRectangle(brush, 0, 0, 5, Height);
-                }
+                e.Graphics.FillPath(brush, path);
+                e.Graphics.DrawPath(border, path);
             }
+
             base.OnPaint(e);
         }
     }
 
-    internal sealed class CheckTile : CheckBox
+    internal sealed class CheckTile : Control
     {
+        private bool isChecked;
+
+        public event EventHandler CheckedChanged;
+
+        public bool Checked
+        {
+            get { return isChecked; }
+            set
+            {
+                if (isChecked == value)
+                {
+                    return;
+                }
+
+                isChecked = value;
+                Invalidate();
+                if (CheckedChanged != null)
+                {
+                    CheckedChanged(this, EventArgs.Empty);
+                }
+            }
+        }
+
         public CheckTile()
         {
-            Appearance = Appearance.Button;
-            FlatStyle = FlatStyle.Flat;
             BackColor = Color.FromArgb(48, 48, 48);
             Cursor = Cursors.Hand;
             DoubleBuffered = true;
-            FlatAppearance.BorderSize = 0;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnClick(EventArgs e)
+        {
+            Checked = !Checked;
+            base.OnClick(e);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            var parentColor = Parent == null ? BackColor : Parent.BackColor;
+            e.Graphics.Clear(parentColor);
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            var fill = Checked ? Color.FromArgb(78, 198, 255) : Color.FromArgb(48, 48, 48);
-            var border = Checked ? Color.FromArgb(78, 198, 255) : Color.FromArgb(130, 130, 130);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var fill = Checked ? Color.FromArgb(78, 198, 255) : BackColor;
+            var border = Checked ? Color.FromArgb(78, 198, 255) : Color.FromArgb(94, 103, 116);
             using (var brush = new SolidBrush(fill))
             using (var pen = new Pen(border, 2))
+            using (var path = UiDrawing.RoundedRectangle(new Rectangle(1, 1, Width - 3, Height - 3), 6))
             {
-                e.Graphics.FillRectangle(brush, 1, 1, Width - 2, Height - 2);
-                e.Graphics.DrawRectangle(pen, 1, 1, Width - 3, Height - 3);
+                e.Graphics.FillPath(brush, path);
+                e.Graphics.DrawPath(pen, path);
             }
 
             if (Checked)
@@ -1597,6 +2204,7 @@ namespace AudioTray
     internal sealed class ColorDotButton : Control
     {
         private readonly ToolTip toolTip = new ToolTip();
+        private bool hovered;
         public Color DotColor { get; set; }
         public Color SurfaceColor { get; set; }
         public Color BorderColor { get; set; }
@@ -1609,17 +2217,219 @@ namespace AudioTray
             SurfaceColor = Color.FromArgb(58, 58, 58);
             BorderColor = Color.FromArgb(78, 78, 78);
         }
+
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            hovered = true;
+            Invalidate();
+            base.OnMouseEnter(e);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            hovered = false;
+            Invalidate();
+            base.OnMouseLeave(e);
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
-            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var borderColor = hovered ? Color.FromArgb(78, 198, 255) : BorderColor;
             using (var background = new SolidBrush(SurfaceColor))
-            using (var border = new Pen(BorderColor, 1))
+            using (var border = new Pen(borderColor, 1))
             using (var dotBrush = new SolidBrush(DotColor))
+            using (var outer = UiDrawing.RoundedRectangle(new Rectangle(0, 0, Width - 1, Height - 1), 8))
+            using (var inner = UiDrawing.RoundedRectangle(new Rectangle(11, 11, Width - 22, Height - 22), 5))
             {
-                e.Graphics.FillRectangle(background, 7, 7, Width - 14, Height - 14);
-                e.Graphics.DrawRectangle(border, 7, 7, Width - 15, Height - 15);
-                e.Graphics.FillEllipse(dotBrush, Width / 2 - 7, Height / 2 - 7, 14, 14);
+                e.Graphics.FillPath(background, outer);
+                e.Graphics.DrawPath(border, outer);
+                e.Graphics.FillPath(dotBrush, inner);
             }
+        }
+    }
+
+    internal sealed class ColorChoice
+    {
+        public readonly string Name;
+        public readonly string DisplayName;
+        public readonly Color Color;
+
+        public ColorChoice(string name, string displayName, Color color)
+        {
+            Name = name;
+            DisplayName = displayName;
+            Color = color;
+        }
+    }
+
+    internal sealed class ColorSelectedEventArgs : EventArgs
+    {
+        public string ColorName { get; private set; }
+
+        public ColorSelectedEventArgs(string colorName)
+        {
+            ColorName = colorName;
+        }
+    }
+
+    internal sealed class ColorPalettePanel : Control
+    {
+        private const int RowHeight = 34;
+        private const int TopPadding = 12;
+        private const int SidePadding = 10;
+        private readonly IList<ColorChoice> choices;
+        private readonly string selectedName;
+        private readonly bool dark;
+        private int hoverIndex = -1;
+
+        public event EventHandler<ColorSelectedEventArgs> ColorSelected;
+
+        public ColorPalettePanel(IList<ColorChoice> choices, string selectedName, bool dark)
+        {
+            this.choices = choices;
+            this.selectedName = selectedName;
+            this.dark = dark;
+            DoubleBuffered = true;
+            Cursor = Cursors.Hand;
+            Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Regular, GraphicsUnit.Point);
+            BackColor = dark ? Color.FromArgb(24, 26, 31) : Color.White;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            var nextHover = GetIndexAt(e.Location);
+            if (hoverIndex != nextHover)
+            {
+                hoverIndex = nextHover;
+                Invalidate();
+            }
+
+            base.OnMouseMove(e);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            hoverIndex = -1;
+            Invalidate();
+            base.OnMouseLeave(e);
+        }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            var index = GetIndexAt(e.Location);
+            if (index >= 0 && index < choices.Count && ColorSelected != null)
+            {
+                ColorSelected(this, new ColorSelectedEventArgs(choices[index].Name));
+            }
+
+            base.OnMouseClick(e);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Color.Transparent);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var surface = dark ? Color.FromArgb(30, 33, 39) : Color.White;
+            var borderColor = dark ? Color.FromArgb(72, 80, 94) : Color.FromArgb(205, 213, 224);
+            var textColor = dark ? Color.FromArgb(245, 247, 250) : Color.FromArgb(24, 26, 31);
+            var mutedText = dark ? Color.FromArgb(176, 184, 196) : Color.FromArgb(88, 96, 106);
+            var hover = dark ? Color.FromArgb(42, 48, 58) : Color.FromArgb(237, 242, 248);
+            var selected = dark ? Color.FromArgb(28, 78, 105) : Color.FromArgb(222, 243, 255);
+
+            using (var path = UiDrawing.RoundedRectangle(new Rectangle(0, 0, Width - 1, Height - 1), 8))
+            using (var brush = new SolidBrush(surface))
+            using (var border = new Pen(borderColor, 1))
+            {
+                e.Graphics.FillPath(brush, path);
+                e.Graphics.DrawPath(border, path);
+            }
+
+            for (var i = 0; i < choices.Count; i++)
+            {
+                var choice = choices[i];
+                var row = GetRowRect(i);
+                var isSelected = string.Equals(choice.Name, selectedName, StringComparison.Ordinal) ||
+                    (choice.Name == null && string.IsNullOrWhiteSpace(selectedName));
+
+                if (isSelected || i == hoverIndex)
+                {
+                    using (var rowPath = UiDrawing.RoundedRectangle(row, 6))
+                    using (var rowBrush = new SolidBrush(isSelected ? selected : hover))
+                    {
+                        e.Graphics.FillPath(rowBrush, rowPath);
+                    }
+                }
+
+                DrawSwatch(e.Graphics, choice, row, isSelected, borderColor, textColor);
+
+                var labelRect = new Rectangle(row.Left + 38, row.Top, row.Width - 70, row.Height);
+                TextRenderer.DrawText(
+                    e.Graphics,
+                    choice.DisplayName,
+                    Font,
+                    labelRect,
+                    choice.Name == null ? mutedText : textColor,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+                if (isSelected)
+                {
+                    using (var pen = new Pen(dark ? Color.White : Color.FromArgb(24, 26, 31), 2))
+                    {
+                        var x = row.Right - 24;
+                        var y = row.Top + 15;
+                        e.Graphics.DrawLines(pen, new[]
+                        {
+                            new Point(x, y + 4),
+                            new Point(x + 4, y + 8),
+                            new Point(x + 12, y)
+                        });
+                    }
+                }
+            }
+        }
+
+        private void DrawSwatch(Graphics graphics, ColorChoice choice, Rectangle row, bool selected, Color borderColor, Color textColor)
+        {
+            var swatch = new Rectangle(row.Left + 12, row.Top + 8, 18, 18);
+            if (choice.Name == null)
+            {
+                using (var pen = new Pen(selected ? textColor : choice.Color, 2))
+                {
+                    graphics.DrawEllipse(pen, swatch);
+                    graphics.DrawLine(pen, swatch.Left + 5, swatch.Bottom - 5, swatch.Right - 5, swatch.Top + 5);
+                }
+                return;
+            }
+
+            using (var brush = new SolidBrush(choice.Color))
+            using (var border = new Pen(selected ? Color.White : borderColor, selected ? 2 : 1))
+            using (var path = UiDrawing.RoundedRectangle(swatch, 5))
+            {
+                graphics.FillPath(brush, path);
+                graphics.DrawPath(border, path);
+            }
+        }
+
+        private int GetIndexAt(Point point)
+        {
+            var index = (point.Y - TopPadding) / RowHeight;
+            if (point.X < SidePadding || point.X > Width - SidePadding || index < 0 || index >= choices.Count)
+            {
+                return -1;
+            }
+
+            return index;
+        }
+
+        private Rectangle GetRowRect(int index)
+        {
+            return new Rectangle(SidePadding, TopPadding + index * RowHeight, Width - SidePadding * 2, RowHeight - 3);
         }
     }
 
@@ -1628,12 +2438,18 @@ namespace AudioTray
         private readonly Color background;
         private readonly Color hover;
         private readonly Color border;
+        private readonly Color accent;
+        private readonly Color text;
+        private readonly Color mutedText;
 
-        public ThemedMenuRenderer(Color background, Color hover, Color border) : base(new ThemedMenuColors(background, hover, border))
+        public ThemedMenuRenderer(Color background, Color hover, Color border, Color accent, Color text, Color mutedText) : base(new ThemedMenuColors(background, hover, border))
         {
             this.background = background;
             this.hover = hover;
             this.border = border;
+            this.accent = accent;
+            this.text = text;
+            this.mutedText = mutedText;
         }
 
         protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
@@ -1654,10 +2470,49 @@ namespace AudioTray
 
         protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
         {
-            var color = e.Item.Selected ? hover : background;
-            using (var brush = new SolidBrush(color))
+            var rect = new Rectangle(4, 1, e.Item.Width - 8, e.Item.Height - 2);
+            if (e.Item.Selected || (e.Item as ToolStripMenuItem) != null && ((ToolStripMenuItem)e.Item).Checked)
             {
-                e.Graphics.FillRectangle(brush, new Rectangle(Point.Empty, e.Item.Size));
+                using (var path = UiDrawing.RoundedRectangle(rect, 6))
+                using (var brush = new SolidBrush(e.Item.Selected ? hover : Color.FromArgb(32, accent)))
+                {
+                    e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                    e.Graphics.FillPath(brush, path);
+                }
+            }
+
+            var item = e.Item as ToolStripMenuItem;
+            if (item != null && item.Checked)
+            {
+                using (var brush = new SolidBrush(accent))
+                {
+                    e.Graphics.FillRectangle(brush, 4, 7, 3, e.Item.Height - 14);
+                }
+            }
+        }
+
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            var item = e.Item as ToolStripMenuItem;
+            e.TextColor = e.Item.Enabled
+                ? (item != null && item.Checked ? Color.White : text)
+                : mutedText;
+            e.TextRectangle = new Rectangle(e.TextRectangle.Left + 6, e.TextRectangle.Top, e.TextRectangle.Width - 6, e.TextRectangle.Height);
+            base.OnRenderItemText(e);
+        }
+
+        protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+        {
+            e.ArrowColor = e.Item.Enabled ? mutedText : Color.FromArgb(90, mutedText);
+            base.OnRenderArrow(e);
+        }
+
+        protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+        {
+            using (var pen = new Pen(border))
+            {
+                var y = e.Item.Height / 2;
+                e.Graphics.DrawLine(pen, 8, y, e.Item.Width - 8, y);
             }
         }
 

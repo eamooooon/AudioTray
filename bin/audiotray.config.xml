@@ -9,7 +9,7 @@
     <string>{0.0.0.00000000}.{81f1da0b-3c93-44b4-9d70-1e83b0f0bb9c}</string>
   </CycleDeviceIds>
   <Marks>
-    <DeviceMark DeviceId="{0.0.0.00000000}.{43c6272b-a10a-4857-b87c-79536bddd320}" ColorName="Red" />
-    <DeviceMark DeviceId="{0.0.0.00000000}.{81f1da0b-3c93-44b4-9d70-1e83b0f0bb9c}" ColorName="Green" />
+    <DeviceMark DeviceId="{0.0.0.00000000}.{43c6272b-a10a-4857-b87c-79536bddd320}" DeviceName="扬声器 (3- Realtek(R) Audio)" ColorName="Red" />
+    <DeviceMark DeviceId="{0.0.0.00000000}.{e8b7e21b-30a2-4f3a-876d-49df3a74a43e}" ColorName="Green" />
   </Marks>
 </AudioTrayConfig>
